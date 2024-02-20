@@ -33,7 +33,7 @@ class ECB:
     SOURCE_NAME = 'ecb'
     _content_document: list[SPP_document]
 
-    HOST = 'https://www.ecb.europa.eu/pub/pubbydate/html/index.en.html'
+    HOST = 'https://www.ecb.europa.eu/press/pr/date/html/index.en.html'
 
     def __init__(self, webdriver: WebDriver, max_count_documents: int = 100, *args, **kwargs):
         """
