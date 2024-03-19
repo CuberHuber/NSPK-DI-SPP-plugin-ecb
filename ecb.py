@@ -35,7 +35,7 @@ class ECB:
 
     HOST = 'https://www.ecb.europa.eu/press/pr/date/html/index.en.html'
 
-    def __init__(self, webdriver: WebDriver, max_count_documents: int = 100, *args, **kwargs):
+    def __init__(self, webdriver: WebDriver, max_count_documents: int = 100, last_document: SPP_document = None, *args, **kwargs):
         """
         Конструктор класса парсера
 
@@ -44,9 +44,9 @@ class ECB:
         """
         # Обнуление списка
         self._content_document = []
-
-        self.driver = webdriver
-        self.max_count_documents = max_count_documents
+        self._driver = webdriver
+        self._max_count_documents = max_count_documents
+        self._last_document = last_document
 
         # Логер должен подключаться так. Вся настройка лежит на платформе
         self.logger = logging.getLogger(self.__class__.__name__)
@@ -61,8 +61,12 @@ class ECB:
         :rtype:
         """
         self.logger.debug("Parse process start")
-        self._parse()
-        self.logger.debug("Parse process finished")
+        try:
+            self._parse()
+        except Exception as e:
+            self.logger.debug(f'Parsing stopped with error: {e}')
+        else:
+            self.logger.debug("Parse process finished")
         return self._content_document
 
     def _parse(self):
@@ -77,29 +81,29 @@ class ECB:
         # ========================================
         # Тут должен находится блок кода, отвечающий за парсинг конкретного источника
         # -
-        self.driver.set_page_load_timeout(40)
+        self._driver.set_page_load_timeout(40)
 
         documents = self.prepared_doc_links()
 
         for index, doc in enumerate(documents):
             if doc.web_link.endswith('html'):
                 try:
-                    self.driver.get(doc.web_link)
+                    self._driver.get(doc.web_link)
                     self.logger.debug('Entered on web page ' + doc.web_link)
                     time.sleep(2)
 
-                    text = self.driver.find_element(By.CLASS_NAME, 'section').text
+                    text = self._driver.find_element(By.CLASS_NAME, 'section').text
                     print(text)
                     try:
-                        text += '\n\n' + self.driver.find_element(By.CLASS_NAME, 'footnotes').text
+                        text += '\n\n' + self._driver.find_element(By.CLASS_NAME, 'footnotes').text
                     except:
                         pass
                     doc.text = text
                     doc.load_date = datetime.datetime.now()
-                    self._content_document.append(doc)
-                    self.logger.info(self._find_document_text_for_logger(doc))
                 except Exception as e:
                     self.logger.error(e)
+                else:
+                    self.find_document(doc)
         # ---
         # ========================================
 
@@ -109,11 +113,11 @@ class ECB:
         """
 
         self._initial_access_source(self.HOST)
-        sections = self.driver.find_elements(By.CLASS_NAME, 'lazy-load')
+        sections = self._driver.find_elements(By.CLASS_NAME, 'lazy-load')
         documents = []
 
         for section in sections:
-            self.driver.execute_script("arguments[0].scrollIntoView();", section)
+            self._driver.execute_script("arguments[0].scrollIntoView();", section)
             while True:
                 if 'loaded' in section.get_attribute('class').split(' '):
                     time.sleep(2)
@@ -122,7 +126,7 @@ class ECB:
                     if len(dts) == len(dds):
                         for date, body in zip(dts, dds):
                             try:
-                                self.driver.execute_script("arguments[0].scrollIntoView();", body)
+                                self._driver.execute_script("arguments[0].scrollIntoView();", body)
                                 doc = SPP_document(
                                     None,
                                     body.find_element(By.CLASS_NAME, 'title').text,
@@ -144,7 +148,7 @@ class ECB:
                                 if doc.web_link.endswith('html'):
                                     documents.append(doc)
                                     # Ограничение парсинга до установленного параметра self.max_count_documents
-                                    if len(documents) >= self.max_count_documents:
+                                    if len(documents) >= self._max_count_documents:
                                         self.logger.debug('Max count documents reached')
                                         return documents
 
@@ -159,7 +163,7 @@ class ECB:
         return documents
 
     def _initial_access_source(self, url: str, delay: int = 2):
-        self.driver.get(url)
+        self._driver.get(url)
         self.logger.debug('Entered on web page '+url)
         time.sleep(delay)
         self._agree_cookie_pass()
@@ -171,14 +175,14 @@ class ECB:
         cookie_agree_xpath = '//*[@id="cookieConsent"]/div[1]/div/a[1]'
 
         try:
-            cookie_button = self.driver.find_element(By.XPATH, cookie_agree_xpath)
-            if WebDriverWait(self.driver, 5).until(ec.element_to_be_clickable(cookie_button)):
+            cookie_button = self._driver.find_element(By.XPATH, cookie_agree_xpath)
+            if WebDriverWait(self._driver, 5).until(ec.element_to_be_clickable(cookie_button)):
                 cookie_button.click()
-                self.logger.debug(F"Parser pass cookie modal on page: {self.driver.current_url}")
+                self.logger.debug(F"Parser pass cookie modal on page: {self._driver.current_url}")
         except NoSuchElementException as e:
-            self.logger.debug(f'modal agree not found on page: {self.driver.current_url}')
+            self.logger.debug(f'modal agree not found on page: {self._driver.current_url}')
         except Exception as e:
-            self.logger.error(f'some error occured on page: {self.driver.current_url}. Error: {e}')
+            self.logger.error(f'some error occured on page: {self._driver.current_url}. Error: {e}')
 
     @staticmethod
     def _find_document_text_for_logger(doc: SPP_document):
@@ -190,3 +194,16 @@ class ECB:
         :rtype:
         """
         return f"Find document | name: {doc.title} | link to web: {doc.web_link} | publication date: {doc.pub_date}"
+
+    def find_document(self, _doc: SPP_document):
+        """
+        Метод для обработки найденного документа источника
+        """
+        if self._last_document and self._last_document.hash == _doc.hash:
+            raise Exception(f"Find already existing document ({self._last_document})")
+
+        if self._max_count_documents and len(self._content_document) >= self._max_count_documents:
+            raise Exception(f"Max count articles reached ({self._max_count_documents})")
+
+        self._content_document.append(_doc)
+        self.logger.info(self._find_document_text_for_logger(_doc))
